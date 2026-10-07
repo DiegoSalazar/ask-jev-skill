@@ -1,0 +1,7 @@
+{
+  "name": "ask-jev-skill",
+  "private": true,
+  "type": "module",
+  "bin": { "jev": "bin/jev.ts" },
+  "scripts": { "test": "bun test" }
+}
