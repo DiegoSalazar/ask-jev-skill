@@ -2,6 +2,11 @@
   "name": "ask-jev-skill",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@12.4.2",
   "bin": { "jev": "bin/jev.ts" },
-  "scripts": { "test": "bun test" }
+  "scripts": {
+    "postinstall": "bash scripts/setup-local.sh",
+    "start": "bash scripts/start-local.sh",
+    "test": "bun test"
+  }
 }

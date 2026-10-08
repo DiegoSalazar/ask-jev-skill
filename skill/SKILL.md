@@ -7,7 +7,9 @@ description: Offload token-expensive judgments to TypeSafe Jev (a decision-only 
 
 Jev answers typed questions about a `state` and returns a probability, never text. You (Claude) keep the reasoning and writing; Jev makes the cheap, repetitive judgment so the raw content never enters your context.
 
-Requires `jev` on PATH and `TYPESAFE_API_KEY` set. If either is missing, say so once and fall back to doing the work normally. Never read, print, or ask for the key.
+Requires `jev` on PATH, plus either `TYPESAFE_API_KEY` (hosted Jev) or `JEV_API_URL` pointing at a local Kev server (`pnpm start` in the ask-jev-skill repo). If neither works, say so once and fall back to doing the work normally. Never read, print, or ask for the key.
+
+**Local backend (Kev):** nothing leaves the machine, so the data rules below relax to "don't send secrets". Kev was trained on short inputs and its calibration is weaker. The CLI already raises the bars and trims inputs, but ask about one small, focused piece of state at a time. Treat `confirm` on long or subtle inputs as `escalate`. If you get connection refused, the server isn't running: tell the user to run `pnpm start`, and don't start it yourself.
 
 ## When to reach for it
 
@@ -67,7 +69,7 @@ Bars: `read` 0.6, `write` 0.8, `destructive` 0.9. Pick `--risk` by what you will
 
 ## Data rules
 
-Everything sent goes to api.typesafe.ai. The CLI redacts common secret patterns, but you are the first filter:
+With hosted Jev, everything sent goes to api.typesafe.ai. The CLI redacts common secret patterns, but you are the first filter:
 
 - Never send `.env*`, keys, credentials, tokens, customer PII, or financial/royalty data.
 - Prefer sending paths, error lines, and diffs of code over raw data dumps.

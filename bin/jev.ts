@@ -1,7 +1,17 @@
 #!/usr/bin/env bun
 import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
-import { ask, decide, isSensitivePath, noulConfidence, rank, type Candidate, type Risk } from "../src/jev";
+import {
+  ask,
+  backend,
+  decide,
+  isSensitivePath,
+  limits,
+  noulConfidence,
+  rank,
+  type Candidate,
+  type Risk,
+} from "../src/jev";
 import { matchingLines, tail } from "../src/triage";
 
 const USAGE = `jev: typed decisions from TypeSafe Jev (state is read from --state or stdin)
@@ -13,7 +23,7 @@ const USAGE = `jev: typed decisions from TypeSafe Jev (state is read from --stat
   jev triage "<question>" [--grep <regex>] -- <cmd> [args...]  run cmd, judge its output, return only the verdict
 
   common: --state <text>  --risk read|write|destructive (adds "action": act|confirm|escalate)
-  env:    TYPESAFE_API_KEY`;
+  env:    TYPESAFE_API_KEY  JEV_API_URL (localhost = local Kev, no key)  JEV_MODEL`;
 
 const argv = process.argv.slice(2);
 const dashdash = argv.indexOf("--");
@@ -30,7 +40,7 @@ const { values, positionals } = parseArgs({
     opt: { type: "string", multiple: true },
     level: { type: "string", multiple: true },
     top: { type: "string", default: "10" },
-    chars: { type: "string", default: "1500" },
+    chars: { type: "string" },
     grep: { type: "string" },
     help: { type: "boolean", short: "h" },
   },
@@ -38,6 +48,8 @@ const { values, positionals } = parseArgs({
 
 const [command, question, ...files] = positionals;
 const risk = values.risk as Risk;
+const be = backend();
+const limit = limits(be);
 
 function fail(msg: string): never {
   console.error(msg);
@@ -51,7 +63,7 @@ async function readState(): Promise<string> {
 }
 
 function out(result: Record<string, unknown>, confidence?: number) {
-  if (confidence !== undefined) result.action = decide(confidence, risk);
+  if (confidence !== undefined) result.action = decide(confidence, risk, be.local);
   console.log(JSON.stringify(result));
 }
 
@@ -92,7 +104,7 @@ async function main() {
       return out({ score: a.score, level, confidence: a.confidence }, a.confidence);
     }
     case "rank": {
-      const chars = Number(values.chars);
+      const chars = Number(values.chars ?? limit.chars);
       const skipped: string[] = [];
       let candidates: Candidate[];
       if (files.length) {
@@ -116,7 +128,7 @@ async function main() {
       const proc = Bun.spawnSync(rest, { stdout: "pipe", stderr: "pipe" });
       const output = `${proc.stdout.toString()}${proc.stderr.toString()}`;
       const res = await ask(
-        { command: rest.join(" "), exit_code: proc.exitCode, output: tail(output, 60_000) },
+        { command: rest.join(" "), exit_code: proc.exitCode, output: tail(output, limit.tail) },
         { q: { type: "noul", instructions: question, criteria: noulCriteria() } },
       );
       const a = res.answers.q;

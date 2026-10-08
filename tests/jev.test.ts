@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
-  API_URL,
+  DEFAULT_API_URL,
+  LIMITS,
   ask,
+  backend,
   decide,
   isSensitivePath,
   noulConfidence,
@@ -45,7 +47,7 @@ describe("ask", () => {
     });
 
     expect(res.answers.q).toEqual({ type: "noul", noul: 0.9 });
-    expect(calls[0].url).toBe(API_URL);
+    expect(calls[0].url).toBe(DEFAULT_API_URL);
     expect(calls[0].init.method).toBe("POST");
     expect((calls[0].init.headers as Record<string, string>).Authorization).toBe("Bearer test-key");
     const body = JSON.parse(calls[0].init.body as string);
@@ -95,6 +97,66 @@ describe("ask", () => {
   });
 });
 
+describe("backend", () => {
+  test("defaults to hosted Jev", () => {
+    expect(backend({})).toEqual({ url: DEFAULT_API_URL, model: "jev-latest", local: false });
+  });
+
+  test.each(["http://127.0.0.1:8009/v1/systemone", "http://localhost:8009/v1/systemone", "http://[::1]:8009/v1/systemone"])(
+    "treats %p as a local Kev server",
+    (url) => expect(backend({ JEV_API_URL: url })).toEqual({ url, model: "kev-latest", local: true }),
+  );
+
+  test("JEV_MODEL overrides the model", () => {
+    expect(backend({ JEV_MODEL: "jev-1.13" }).model).toBe("jev-1.13");
+  });
+
+  test("a remote override is not local", () => {
+    expect(backend({ JEV_API_URL: "https://jev.example.com/v1/systemone" }).local).toBe(false);
+  });
+});
+
+describe("ask against a local backend", () => {
+  const local = { url: "http://127.0.0.1:8009/v1/systemone", model: "kev-latest", local: true };
+
+  test("needs no API key and sends no auth header", async () => {
+    const prev = process.env.TYPESAFE_API_KEY;
+    delete process.env.TYPESAFE_API_KEY;
+    try {
+      const { fn, calls } = mockFetch([json(noulAnswer({ q: 0.7 }))]);
+      await ask("x", { q: { type: "noul", instructions: "y" } }, { fetch: fn, backend: local });
+      expect(calls[0].url).toBe(local.url);
+      expect((calls[0].init.headers as Record<string, string>).Authorization).toBeUndefined();
+      expect(JSON.parse(calls[0].init.body as string).model).toBe("kev-latest");
+    } finally {
+      if (prev !== undefined) process.env.TYPESAFE_API_KEY = prev;
+    }
+  });
+
+  test("never sends the TypeSafe key to a local server", async () => {
+    const { fn, calls } = mockFetch([json(noulAnswer({ q: 0.7 }))]);
+    await ask("x", {}, { apiKey: "real-key", fetch: fn, backend: local });
+    expect((calls[0].init.headers as Record<string, string>).Authorization).toBeUndefined();
+  });
+
+  test("rank sends local batches one at a time, never flooding a serial server", async () => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    let calls = 0;
+    const fn = (async () => {
+      calls++;
+      maxInFlight = Math.max(maxInFlight, ++inFlight);
+      await new Promise((r) => setTimeout(r, 5));
+      inFlight--;
+      return json(noulAnswer({ k0: 0.5, k1: 0.5, k2: 0.5, k3: 0.5 }));
+    }) as unknown as typeof fetch;
+    const candidates = Array.from({ length: 10 }, (_, i) => ({ label: `${i}`, text: `${i}` }));
+    await rank("q", candidates, { fetch: fn, backend: local });
+    expect(calls).toBe(Math.ceil(10 / LIMITS.local.batchSize));
+    expect(maxInFlight).toBe(LIMITS.local.concurrency);
+  });
+});
+
 describe("redact", () => {
   test.each([
     ["password=hunter2", "hunter2"],
@@ -137,6 +199,15 @@ describe("decide", () => {
   ] as const)("confidence %p at risk %p -> %p", (confidence, risk, action) => {
     expect(decide(confidence, risk)).toBe(action);
   });
+
+  test.each([
+    [0.65, "read", "confirm"],
+    [0.7, "read", "act"],
+    [0.95, "destructive", "confirm"],
+    [1, "destructive", "act"],
+  ] as const)("local backend raises the bar: %p at %p -> %p", (confidence, risk, action) => {
+    expect(decide(confidence, risk, true)).toBe(action);
+  });
 });
 
 test("noulConfidence measures distance from a coin flip", () => {
@@ -167,6 +238,20 @@ describe("rank", () => {
     expect(Object.keys(questions)).toEqual(["k0", "k1"]);
     expect(questions.k1.instructions).toContain("`candidates.k1`");
     expect(questions.k1.instructions).not.toContain("[1]");
+  });
+
+  test("remote batches run in parallel", async () => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const fn = (async () => {
+      maxInFlight = Math.max(maxInFlight, ++inFlight);
+      await new Promise((r) => setTimeout(r, 5));
+      inFlight--;
+      return json(noulAnswer({ k0: 0.5 }));
+    }) as unknown as typeof fetch;
+    const candidates = Array.from({ length: 3 }, (_, i) => ({ label: `${i}`, text: `${i}` }));
+    await rank("q", candidates, { apiKey: "k", fetch: fn, batchSize: 1 });
+    expect(maxInFlight).toBe(3);
   });
 
   test("batches requests and sorts by relevance", async () => {
